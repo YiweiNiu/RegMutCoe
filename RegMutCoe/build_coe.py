@@ -28,36 +28,6 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger(__name__)
 
 
-def bicor(a=None, b=None):
-    '''
-    biweight midcorrelation
-    from: https://github.com/pandas-dev/pandas/pull/9826
-
-    @parameter a: 1D array
-    @parameter b: 1D array
-
-    @return: biweight midcorrelation
-    '''
-    a_median = a.median()
-    b_median = b.median()
-
-    # Median absolute deviation
-    a_mad = (a - a_median).abs().median()
-    b_mad = (b - b_median).abs().median()
-
-    u = (a - a_median) / (9 * a_mad)
-    v = (b - b_median) / (9 * b_mad)
-
-    w_a = np.square(1 - np.square(u)) * ((1 - u.abs()) > 0)
-    w_b = np.square(1 - np.square(v)) * ((1 - v.abs()) > 0)
-    
-    a_item = (a - a_median) * w_a
-    b_item = (b - b_median) * w_b
-
-    return (a_item * b_item).sum() / (
-        np.sqrt(np.square(a_item).sum()) * np.sqrt(np.square(b_item).sum()))
-
-
 def choose_beta(cor_mat=None, network_type='unsigned', nBreaks=10, RsquaredCut=0.8, eps=0.1):
     '''
     choose soft-threshold power to get scale-free topology
@@ -75,7 +45,9 @@ def choose_beta(cor_mat=None, network_type='unsigned', nBreaks=10, RsquaredCut=0
             sys.exit(1)
 
         # generalized connectivity
-        k = adj_mat.sum(axis=1) - 1; mean_k = np.mean(k)
+        k = adj_mat.sum(axis=1) - 1 # the reason "minus -1" is that WGCNA does this
+                                    # but Steve Horvath said diagonal elements are all 1
+        mean_k = np.mean(k)
         dk = (np.histogram(k, bins=nBreaks, weights=k)[0] /
                            np.histogram(k, bins=nBreaks)[0])
 
@@ -101,13 +73,9 @@ def choose_beta(cor_mat=None, network_type='unsigned', nBreaks=10, RsquaredCut=0
         else:
             sft_fit = r_sq
 
-        betas[0].append(beta)
-        betas[1].append(sft_fit)    # 
+        betas[0].append(beta)   # beta
+        betas[1].append(sft_fit)    # r_sq
         betas[2].append(mean_k) # mean connectivity
-
-    print (betas[0])
-    print (betas[1])
-    print (betas[2])
 
     if max(betas[1]) < RsquaredCut:
         logger.warning('Cannot find beta between 1 and 20, beta=6 would be used.')
@@ -175,7 +143,12 @@ def build_coe(exp_mat=None, cor_meth="pearson", beta=None, sift_by_ppi=False,
     elif cor_meth == 'spearman':
         cor_mat = df.T.corr(method='spearman')
     elif cor_meth == 'bicor':
-        cor_mat = df.T.corr(method=bicor)
+        try:
+            from astropy.stats import biweight_midcorrelation
+        except ImportError:
+            logger.error('Cannot import biweight_midcorrelation from astropy module.')
+            sys.exit(1)
+        cor_mat = df.T.corr(method=biweight_midcorrelation)
     else:
         logger.error('Not supported correlation method %s.' %cor_meth)
         sys.exit(1)
@@ -188,9 +161,9 @@ def build_coe(exp_mat=None, cor_meth="pearson", beta=None, sift_by_ppi=False,
 
     # adjacency
     if network_type == 'signed':
-        adj_mat = cor_mat.abs().pow(beta)
-    elif network_type == 'unsigned':
         adj_mat = cor_mat.mul(0.5).add(0.5).abs().pow(beta)
+    elif network_type == 'unsigned':
+        adj_mat = cor_mat.abs().pow(beta)
     else:
         logger.error('Unsupported network type %s.' %network_type)
         sys.exit(1)
@@ -210,8 +183,8 @@ def build_coe(exp_mat=None, cor_meth="pearson", beta=None, sift_by_ppi=False,
         for u,v in G.edges:
             G[u][v]['weight'] = coe_net[u][v]['weight']
 
-        #for node in G:      # self-connected node
-            #G.add_edge(node, node, 'weight'=1.0)
+        for node in G:      # self-connected node
+            G.add_edge(node, node, weight=1.0)
 
         return G
     else:
@@ -220,7 +193,7 @@ def build_coe(exp_mat=None, cor_meth="pearson", beta=None, sift_by_ppi=False,
 
 def test():
     exp_mat = 'D:/Project/20190510_DriverNetPy/RegMutCoe/test/datExpr.txt'
-    G = build_coe(exp_mat)
+    G = build_coe(exp_mat, cor_meth='bicor')
 
     print(G.number_of_nodes())
     print(G['MMT00000044']['MMT00000046']['weight'])
